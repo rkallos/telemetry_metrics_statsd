@@ -317,7 +317,7 @@ defmodule TelemetryMetricsStatsd do
   require Record
 
   alias Telemetry.Metrics
-  alias TelemetryMetricsStatsd.{EventHandler, Options, UDP}
+  alias TelemetryMetricsStatsd.{EventHandler, Options, UDP, Packet}
 
   @type prefix :: String.t() | atom() | nil
   @type host :: String.t() | :inet.ip_address()
@@ -331,6 +331,8 @@ defmodule TelemetryMetricsStatsd do
           | {:formatter, :standard | :datadog}
           | {:global_tags, Keyword.t()}
           | {:host_resolution_interval, non_neg_integer()}
+          | {:max_packet_bytes, non_neg_integer()}
+          | {:max_report_interval_ms, non_neg_integer()}
   @type options :: [option]
 
   Record.defrecordp(:hostent, Record.extract(:hostent, from_lib: "kernel/include/inet.hrl"))
@@ -398,6 +400,11 @@ defmodule TelemetryMetricsStatsd do
     end
   end
 
+  @spec send(pid(), iodata()) :: :ok
+  def send(reporter, line_packet) do
+    GenServer.cast(reporter, {:send, line_packet})
+  end
+
   @doc false
   @spec get_pool_id(pid()) :: :ets.tid()
   def get_pool_id(reporter) do
@@ -434,22 +441,35 @@ defmodule TelemetryMetricsStatsd do
       EventHandler.attach(
         metrics,
         self(),
-        pool_id,
         options.mtu,
         options.prefix,
         options.formatter,
         options.global_tags
       )
 
+    reporter = self()
+
+    send_fun = fn lines ->
+      publish_metrics(reporter, pool_id, lines)
+    end
+
+    packet = Packet.new(options.max_packet_bytes, options.max_report_interval_ms, send_fun)
+
     {:ok,
      %{
        udp_config: udp_config,
        handler_ids: handler_ids,
        pool_id: pool_id,
+       packet: packet,
        host: options.host,
        port: options.port,
        host_resolution_interval: options.host_resolution_interval
-     }}
+     }, Packet.get_timeout(packet)}
+  end
+
+  @impl true
+  def handle_cast({:send, line_packet}, %{packet: packet} = state) do
+    noreply(Map.put(state, :packet, Packet.maybe_send(packet, line_packet)))
   end
 
   @impl true
@@ -465,20 +485,25 @@ defmodule TelemetryMetricsStatsd do
       case UDP.open(state.udp_config) do
         {:ok, udp} ->
           :ets.insert(pool_id, {:udp, udp})
-          {:noreply, state}
+          noreply(state)
 
         {:error, reason} ->
           Logger.error("Failed to reopen UDP socket: #{inspect(reason)}")
           {:stop, {:udp_open_failed, reason}, state}
       end
     else
-      {:noreply, state}
+      noreply(state)
     end
   end
 
   @impl true
   def handle_call(:get_pool_id, _from, %{pool_id: pool_id} = state) do
     {:reply, pool_id, state}
+  end
+
+  @impl true
+  def handle_info(:timeout, %{packet: packet} = state) do
+    noreply(Map.put(state, :packet, Packet.flush_send(packet)))
   end
 
   @impl true
@@ -510,7 +535,7 @@ defmodule TelemetryMetricsStatsd do
 
     Process.send_after(self(), :resolve_host, interval)
 
-    {:noreply, new_state}
+    noreply(new_state)
   end
 
   @impl true
@@ -551,5 +576,28 @@ defmodule TelemetryMetricsStatsd do
       updated_udp = UDP.update(udp, new_host, new_port)
       :ets.insert(pool_id, {:udp, updated_udp})
     end)
+  end
+
+  defp publish_metrics(reporter, pool_id, packets) do
+    case get_udp(pool_id) do
+      {:ok, udp} ->
+        Enum.reduce_while(packets, :cont, fn packet, :cont ->
+          case UDP.send(udp, packet) do
+            :ok ->
+              {:cont, :cont}
+
+            {:error, reason} ->
+              udp_error(reporter, udp, reason)
+              {:halt, :halt}
+          end
+        end)
+
+      :error ->
+        :ok
+    end
+  end
+
+  defp noreply(%{packet: packet} = state) do
+    {:noreply, state, Packet.get_timeout(packet)}
   end
 end

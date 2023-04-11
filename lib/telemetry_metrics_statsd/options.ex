@@ -60,6 +60,18 @@ defmodule TelemetryMetricsStatsd.Options do
       doc:
         "Maximum Transmission Unit of the link between your application and the StastD server in bytes. " <>
           "If this value is greater than the actual MTU of the link, UDP packets with published metrics will be dropped."
+    ],
+    max_packet_bytes: [
+      type: :non_neg_integer,
+      default: 1024,
+      doc:
+        "maximum bytes for the payload (header not included)"
+    ],
+    max_report_interval_ms: [
+      type: :non_neg_integer,
+      default: 1000,
+      doc:
+        "maximum time to keep buffering metrics"
     ]
   ]
 

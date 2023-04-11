@@ -2,12 +2,11 @@ defmodule TelemetryMetricsStatsd.EventHandler do
   @moduledoc false
 
   alias Telemetry.Metrics
-  alias TelemetryMetricsStatsd.{Formatter, Packet, UDP}
+  alias TelemetryMetricsStatsd.{Formatter, Packet}
 
   @spec attach(
           [Metrics.t()],
           reporter :: pid(),
-          pool_id :: :ets.tid(),
           mtu :: non_neg_integer(),
           prefix :: String.t() | nil,
           formatter :: Formatter.t(),
@@ -15,7 +14,7 @@ defmodule TelemetryMetricsStatsd.EventHandler do
         ) :: [
           :telemetry.handler_id()
         ]
-  def attach(metrics, reporter, pool_id, mtu, prefix, formatter, global_tags) do
+  def attach(metrics, reporter, mtu, prefix, formatter, global_tags) do
     metrics_by_event = Enum.group_by(metrics, & &1.event_name)
 
     for {event_name, metrics} <- metrics_by_event do
@@ -24,7 +23,6 @@ defmodule TelemetryMetricsStatsd.EventHandler do
       :ok =
         :telemetry.attach(handler_id, event_name, &__MODULE__.handle_event/4, %{
           reporter: reporter,
-          pool_id: pool_id,
           metrics: metrics,
           mtu: mtu,
           prefix: prefix,
@@ -47,7 +45,6 @@ defmodule TelemetryMetricsStatsd.EventHandler do
 
   def handle_event(_event, measurements, metadata, %{
         reporter: reporter,
-        pool_id: pool_id,
         metrics: metrics,
         mtu: mtu,
         prefix: prefix,
@@ -76,7 +73,7 @@ defmodule TelemetryMetricsStatsd.EventHandler do
         :ok
 
       packets ->
-        publish_metrics(reporter, pool_id, Packet.build_packets(packets, mtu, "\n"))
+        TelemetryMetricsStatsd.send(reporter, Packet.build_packets(packets, mtu, "\n"))
     end
   end
 
@@ -122,26 +119,6 @@ defmodule TelemetryMetricsStatsd.EventHandler do
       value
     else
       nil
-    end
-  end
-
-  @spec publish_metrics(pid(), :ets.tid(), [binary()]) :: :ok
-  defp publish_metrics(reporter, pool_id, packets) do
-    case TelemetryMetricsStatsd.get_udp(pool_id) do
-      {:ok, udp} ->
-        Enum.reduce_while(packets, :cont, fn packet, :cont ->
-          case UDP.send(udp, packet) do
-            :ok ->
-              {:cont, :cont}
-
-            {:error, reason} ->
-              TelemetryMetricsStatsd.udp_error(reporter, udp, reason)
-              {:halt, :halt}
-          end
-        end)
-
-      :error ->
-        :ok
     end
   end
 
