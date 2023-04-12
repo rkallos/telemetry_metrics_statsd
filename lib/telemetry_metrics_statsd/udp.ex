@@ -3,27 +3,33 @@ defmodule TelemetryMetricsStatsd.UDP do
 
   use GenServer
   require Logger
+  alias TelemetryMetricsStatsd.Packet
 
-  defstruct [:host, :port, :socket]
+  defstruct [:reporter, :host, :port, :socket, :packet]
 
   @opaque t :: %__MODULE__{
+            reporter: pid(),
             host: :inet.hostname() | :inet.ip_address() | :inet.local_address(),
             port: :inet.port_number(),
-            socket: :gen_udp.socket()
+            socket: :gen_udp.socket(),
+            packet: Packet.t()
           }
 
   @type config :: %{
-          :host => :inet.hostname() | :inet.ip_address() | :inet.local_address(),
-          optional(:port) => :inet.port_number()
+          reporter: pid(),
+          host: :inet.hostname() | :inet.ip_address() | :inet.local_address(),
+          port: :inet.port_number(),
+          mtu: non_neg_integer(),
+          max_report_interval_ms: non_neg_integer()
         }
 
   def start_link(options) do
     GenServer.start_link(__MODULE__, options)
   end
 
-  @spec send(GenServer.name(), iodata) :: :ok | {:error, term}
+  @spec send(GenServer.name(), iodata) :: :ok
   def send(pid, data) do
-    GenServer.call(pid, {:send, data})
+    GenServer.cast(pid, {:send, data})
   end
 
   def update(pid, new_host, new_port) do
@@ -39,47 +45,87 @@ defmodule TelemetryMetricsStatsd.UDP do
   end
 
   @impl true
+  @spec init(config :: config) :: {:ok, __MODULE__.t(), timeout()}
   def init(config) do
-    opts = [active: false]
+    host = config.host
+    reporter = config.reporter
 
-    opts =
-      case config.host do
-        {:local, _} ->
-          [:local | opts]
-
-        _ ->
-          opts
-      end
-
-    case :gen_udp.open(0, opts) do
+    case open(host) do
       {:ok, socket} ->
-        state = struct(__MODULE__, Map.put(config, :socket, socket))
-        {:ok, state}
+        send_fun = make_send_fun(reporter, self(), socket, host, config.port)
+
+        packet = Packet.new(config.mtu, config.max_report_interval_ms * 1000, send_fun)
+        state = struct(__MODULE__, Map.merge(config, %{reporter: reporter, socket: socket, packet: packet}))
+        {:ok, state, Packet.get_timeout(packet)}
     end
   end
 
   @impl true
-  def handle_call({:update, new_host, new_port}, _from, state) do
-    {:noreply, %__MODULE__{state | host: new_host, port: new_port}}
+  def handle_call({:update, new_host, new_port}, _from, %__MODULE__{reporter: reporter, socket: socket, packet: packet} = state) do
+    new_packet = %Packet{packet | send_fun: make_send_fun(reporter, self(), socket, new_host, new_port)}
+    {:noreply, %__MODULE__{state | host: new_host, port: new_port, packet: new_packet}}
   end
 
   @impl true
-  def handle_call({:send, data}, _from, %__MODULE__{host: host, port: port, socket: socket} = state) do
-    result =
+  def handle_call(:close, _from, %__MODULE__{socket: socket, packet: packet} = state) do
+    Packet.flush_send(packet)
+    :gen_udp.close(socket)
+    {:stop, :close, :ok, state}
+  end
+
+  @impl true
+  def handle_cast({:send, data}, %{packet: packet} = state) do
+    noreply(Map.put(state, :packet, Packet.maybe_send(packet, data)))
+  end
+
+  @impl true
+  def handle_info(:timeout, %{packet: packet} = state) do
+    noreply(Map.put(state, :packet, Packet.flush_send(packet)))
+  end
+
+  defp noreply(%{packet: packet} = state) do
+    {:noreply, state, Packet.get_timeout(packet)}
+  end
+
+  defp open(host) do
+    default_opts = [active: false]
+
+    opts =
       case host do
         {:local, _} ->
-          :gen_udp.send(socket, host, 0, data)
-
+          [:local | default_opts]
         _ ->
-          :gen_udp.send(socket, host, port, data)
+          default_opts
       end
 
-    {:reply, result, state}
+    case :gen_udp.open(0, opts) do
+      {:ok, socket} ->
+        {:ok, socket}
+
+      {:error, _} = err ->
+        err
+    end
   end
 
-  @impl true
-  def handle_call(:close, _from, %__MODULE__{socket: socket} = state) do
-    :gen_udp.close(socket)
-    {:reply, :ok, state}
+  defp make_send_fun(reporter, socket_owner, socket, {:local, _} = host, _port) do
+    fn data ->
+      do_send(reporter, socket_owner, socket, host, 0, data)
+    end
+  end
+
+  defp make_send_fun(reporter, socket_owner, socket, host, port) do
+    fn data ->
+      do_send(reporter, socket_owner, socket, host, port, data)
+    end
+  end
+
+  defp do_send(reporter, socket_owner, socket, host, port, data) do
+    case :gen_udp.send(socket, host, port, data) do
+      :ok ->
+        :ok
+      {:error, reason} = error ->
+        TelemetryMetricsStatsd.udp_error(reporter, socket_owner, reason)
+        error
+    end
   end
 end

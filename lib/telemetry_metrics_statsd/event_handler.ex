@@ -46,7 +46,6 @@ defmodule TelemetryMetricsStatsd.EventHandler do
   end
 
   def handle_event(_event, measurements, metadata, %{
-        reporter: reporter,
         pool_id: pool_id,
         metrics: metrics,
         mtu: mtu,
@@ -76,7 +75,7 @@ defmodule TelemetryMetricsStatsd.EventHandler do
         :ok
 
       packets ->
-        publish_metrics(reporter, pool_id, Packet.build_packets(packets, mtu, "\n"))
+        publish_metrics(pool_id, Packet.build_packets(packets, mtu, "\n"))
     end
   end
 
@@ -125,19 +124,9 @@ defmodule TelemetryMetricsStatsd.EventHandler do
     end
   end
 
-  @spec publish_metrics(pid(), atom, [binary()]) :: :ok
-  defp publish_metrics(reporter, pool_id, packets) do
-    name = Pool.get_udp(pool_id)
-    Enum.reduce_while(packets, :cont, fn packet, :cont ->
-      case UDP.send(name, packet) do
-        :ok ->
-          {:cont, :cont}
-
-        {:error, reason} ->
-          TelemetryMetricsStatsd.udp_error(reporter, name, reason)
-          {:halt, :halt}
-      end
-    end)
+  @spec publish_metrics(atom, [binary()]) :: :ok
+  defp publish_metrics(pool_id, packets) do
+    UDP.send(Pool.get_udp(pool_id), packets)
   end
 
   @spec sample(Metrics.t()) :: Metrics.measurement() | nil

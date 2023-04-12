@@ -1,8 +1,6 @@
 defmodule TelemetryMetricsStatsd.Pool do
   @moduledoc false
 
-  @pool __MODULE__
-
   alias TelemetryMetricsStatsd.UDP
 
   def new(pool_size, udp_config) do
@@ -39,5 +37,9 @@ defmodule TelemetryMetricsStatsd.Pool do
     |> Enum.each(fn name ->
       UDP.update(name, new_host, new_port)
     end)
+  end
+
+  def stop(pool_id) do
+    :wpool.stop_sup_pool(pool_id)
   end
 end

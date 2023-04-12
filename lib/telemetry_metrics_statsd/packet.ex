@@ -54,7 +54,7 @@ defmodule TelemetryMetricsStatsd.Packet do
         new_packet = flush_send(packet)
         maybe_send(new_packet, line)
       false ->
-        maybe_send(%Packet{packet | data: concatenate(data, line), bytes: new_bytes}, line)
+        maybe_send(%Packet{packet | data: concatenate(data, line), bytes: new_bytes})
     end
   end
 

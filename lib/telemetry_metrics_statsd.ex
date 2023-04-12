@@ -331,6 +331,7 @@ defmodule TelemetryMetricsStatsd do
           | {:formatter, :standard | :datadog}
           | {:global_tags, Keyword.t()}
           | {:host_resolution_interval, non_neg_integer()}
+          | {:max_report_interval_ms, non_neg_integer()}
   @type options :: [option]
 
   Record.defrecordp(:hostent, Record.extract(:hostent, from_lib: "kernel/include/inet.hrl"))
@@ -384,13 +385,12 @@ defmodule TelemetryMetricsStatsd do
   end
 
   @doc false
-  @doc false
-  @spec get_pool_id(pid()) :: :ets.tid()
+  @spec get_pool_id(pid()) :: atom()
   def get_pool_id(reporter) do
     GenServer.call(reporter, :get_pool_id)
   end
 
-  @spec udp_error(pid(), atom, reason :: term) :: :ok
+  @spec udp_error(pid(), pid(), reason :: term) :: :ok
   def udp_error(reporter, udp, reason) do
     GenServer.cast(reporter, {:udp_error, udp, reason})
   end
@@ -400,11 +400,9 @@ defmodule TelemetryMetricsStatsd do
     Process.flag(:trap_exit, true)
     metrics = Map.fetch!(options, :metrics)
 
-    udp_config =
-      case options.host do
-        {:local, _} = host -> %{host: host}
-        _ -> configure_host_resolution(options)
-      end
+    default_udp_config = %{reporter: self(), mtu: options.mtu, max_report_interval_ms: options.max_report_interval_ms}
+
+    udp_config = Map.merge(configure_host_resolution(options), default_udp_config)
 
     {:ok, pool_id} = Pool.new(options.pool_size, udp_config)
 
@@ -477,9 +475,9 @@ defmodule TelemetryMetricsStatsd do
   end
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(_reason, %{pool_id: pool_id} = state) do
     EventHandler.detach(state.handler_ids)
-
+    Pool.stop(pool_id)
     :ok
   end
 
