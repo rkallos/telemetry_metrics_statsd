@@ -5,10 +5,9 @@ defmodule TelemetryMetricsStatsd.UDP do
   require Logger
   alias TelemetryMetricsStatsd.Packet
 
-  defstruct [:reporter, :host, :port, :socket, :packet]
+  defstruct [:host, :port, :socket, :packet]
 
   @opaque t :: %__MODULE__{
-            reporter: pid(),
             host: :inet.hostname() | :inet.ip_address() | :inet.local_address(),
             port: :inet.port_number(),
             socket: :gen_udp.socket(),
@@ -16,7 +15,6 @@ defmodule TelemetryMetricsStatsd.UDP do
           }
 
   @type config :: %{
-          reporter: pid(),
           host: :inet.hostname() | :inet.ip_address() | :inet.local_address(),
           port: :inet.port_number(),
           mtu: non_neg_integer(),
@@ -48,21 +46,20 @@ defmodule TelemetryMetricsStatsd.UDP do
   @spec init(config :: config) :: {:ok, __MODULE__.t(), timeout()}
   def init(config) do
     host = config.host
-    reporter = config.reporter
 
     case open(host) do
       {:ok, socket} ->
-        send_fun = make_send_fun(reporter, self(), socket, host, config.port)
+        send_fun = make_send_fun(self(), socket, host, config.port)
 
         packet = Packet.new(config.mtu, config.max_report_interval_ms * 1000, send_fun)
-        state = struct(__MODULE__, Map.merge(config, %{reporter: reporter, socket: socket, packet: packet}))
+        state = struct(__MODULE__, Map.merge(config, %{socket: socket, packet: packet}))
         {:ok, state, Packet.get_timeout(packet)}
     end
   end
 
   @impl true
-  def handle_call({:update, new_host, new_port}, _from, %__MODULE__{reporter: reporter, socket: socket, packet: packet} = state) do
-    new_packet = %Packet{packet | send_fun: make_send_fun(reporter, self(), socket, new_host, new_port)}
+  def handle_call({:update, new_host, new_port}, _from, %__MODULE__{socket: socket, packet: packet} = state) do
+    new_packet = %Packet{packet | send_fun: make_send_fun(self(), socket, new_host, new_port)}
     {:noreply, %__MODULE__{state | host: new_host, port: new_port, packet: new_packet}}
   end
 
@@ -107,24 +104,24 @@ defmodule TelemetryMetricsStatsd.UDP do
     end
   end
 
-  defp make_send_fun(reporter, socket_owner, socket, {:local, _} = host, _port) do
+  defp make_send_fun(socket_owner, socket, {:local, _} = host, _port) do
     fn data ->
-      do_send(reporter, socket_owner, socket, host, 0, data)
+      do_send(socket_owner, socket, host, 0, data)
     end
   end
 
-  defp make_send_fun(reporter, socket_owner, socket, host, port) do
+  defp make_send_fun(socket_owner, socket, host, port) do
     fn data ->
-      do_send(reporter, socket_owner, socket, host, port, data)
+      do_send(socket_owner, socket, host, port, data)
     end
   end
 
-  defp do_send(reporter, socket_owner, socket, host, port, data) do
+  defp do_send(socket_owner, socket, host, port, data) do
     case :gen_udp.send(socket, host, port, data) do
       :ok ->
         :ok
       {:error, reason} = error ->
-        TelemetryMetricsStatsd.udp_error(reporter, socket_owner, reason)
+        TelemetryMetricsStatsd.udp_error(socket_owner, reason)
         error
     end
   end

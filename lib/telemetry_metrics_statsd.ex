@@ -390,9 +390,10 @@ defmodule TelemetryMetricsStatsd do
     GenServer.call(reporter, :get_pool_id)
   end
 
-  @spec udp_error(pid(), pid(), reason :: term) :: :ok
-  def udp_error(reporter, udp, reason) do
-    GenServer.cast(reporter, {:udp_error, udp, reason})
+  @spec udp_error(pid(), reason :: term) :: :ok
+  def udp_error(udp, reason) do
+    Logger.error("Failed to publish metrics over UDP: #{inspect(reason)}")
+    UDP.stop(udp, reason)
   end
 
   @impl true
@@ -400,7 +401,7 @@ defmodule TelemetryMetricsStatsd do
     Process.flag(:trap_exit, true)
     metrics = Map.fetch!(options, :metrics)
 
-    default_udp_config = %{reporter: self(), mtu: options.mtu, max_report_interval_ms: options.max_report_interval_ms}
+    default_udp_config = %{mtu: options.mtu, max_report_interval_ms: options.max_report_interval_ms}
 
     udp_config = Map.merge(configure_host_resolution(options), default_udp_config)
 
@@ -433,13 +434,6 @@ defmodule TelemetryMetricsStatsd do
   @impl true
   def handle_call(:get_pool_id, _from, %{pool_id: pool_id} = state) do
     {:reply, pool_id, state}
-  end
-
-  @impl true
-  def handle_cast({:udp_error, name, reason}, state) do
-    Logger.error("Failed to publish metrics over UDP: #{inspect(reason)}")
-    UDP.stop(name, reason)
-    {:noreply, state}
   end
 
   @impl true
