@@ -371,12 +371,12 @@ defmodule TelemetryMetricsStatsdTest do
     test "reporter connects to a Unix domain socket" do
       {socket, socket_path} = given_unix_socket_opened()
       counter = given_counter("http.request.count")
-
       start_reporter(metrics: [counter], socket_path: socket_path)
 
       :telemetry.execute([:http, :request], %{latency: 213})
 
       assert_reported(socket, "http.request.count:1|c")
+      remove_unix_socket(socket_path)
     end
   end
 
@@ -627,16 +627,20 @@ defmodule TelemetryMetricsStatsdTest do
   end
 
   defp given_udp_port_opened() do
-    {:ok, socket} = :gen_udp.open(0, [:binary, active: false])
+    {:ok, socket} = :gen_udp.open(0, [:list, active: false])
     {:ok, port} = :inet.port(socket)
     {socket, port}
   end
 
   defp given_unix_socket_opened() do
-    socket_name = :crypto.strong_rand_bytes(50) |> Base.encode16(case: :lower)
+    socket_name = :crypto.strong_rand_bytes(30) |> Base.encode16(case: :lower)
     socket_path = Path.join("/tmp", socket_name)
-    {:ok, socket} = :gen_udp.open(0, [:binary, :local, active: false, ip: {:local, socket_path}])
+    {:ok, socket} = :gen_udp.open(0, [:list, :local, active: false, ip: {:local, socket_path}])
     {socket, socket_path}
+  end
+
+  defp remove_unix_socket(socket_path) do
+    File.rm(socket_path)
   end
 
   defp start_reporter(options) do
@@ -647,7 +651,7 @@ defmodule TelemetryMetricsStatsdTest do
   defp assert_reported(socket, expected_payload) do
     expected_size = byte_size(expected_payload)
     {:ok, {_host, _port, payload}} = :gen_udp.recv(socket, expected_size, 1000)
-    assert payload == expected_payload
+    assert payload == String.to_charlist(expected_payload)
   end
 
   defp refute_reported(socket) do
