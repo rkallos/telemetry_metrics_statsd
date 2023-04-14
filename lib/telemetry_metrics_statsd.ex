@@ -393,7 +393,7 @@ defmodule TelemetryMetricsStatsd do
   @spec udp_error(pid(), reason :: term) :: :ok
   def udp_error(udp, reason) do
     Logger.error("Failed to publish metrics over UDP: #{inspect(reason)}")
-    UDP.stop(udp, reason)
+    UDP.close(udp)
   end
 
   @impl true

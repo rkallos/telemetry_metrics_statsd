@@ -356,10 +356,11 @@ defmodule TelemetryMetricsStatsdTest do
       reporter = start_reporter(metrics: [], pool_size: 1)
       pool_id = TelemetryMetricsStatsd.get_pool_id(reporter)
       udp = Process.whereis(Pool.get_udp(pool_id))
+      socket = udp_socket(udp)
 
       TelemetryMetricsStatsd.udp_error(udp, :closed)
 
-      assert eventually(fn -> Process.whereis(Pool.get_udp(pool_id)) != udp end)
+      assert eventually(fn -> socket != udp_socket(udp) end)
     end
 
     @tag :capture_log
@@ -367,12 +368,13 @@ defmodule TelemetryMetricsStatsdTest do
       reporter = start_reporter(metrics: [], pool_size: 1)
       pool_id = TelemetryMetricsStatsd.get_pool_id(reporter)
       udp = Process.whereis(Pool.get_udp(pool_id))
+      socket = udp_socket(udp)
 
       TelemetryMetricsStatsd.udp_error(udp, :closed)
 
-      eventually(fn -> Process.whereis(Pool.get_udp(pool_id)) != udp end)
+      eventually(fn -> socket != udp_socket(udp) end)
 
-      eventually(fn -> Process.alive?(udp) == false end)
+      eventually(fn -> nil == Port.info(socket) end)
     end
   end
 
@@ -676,5 +678,9 @@ defmodule TelemetryMetricsStatsdTest do
 
   defp udp_host(pid) do
     get_state(pid).host
+  end
+
+  defp udp_socket(pid) do
+    get_state(pid).socket
   end
 end

@@ -35,15 +35,11 @@ defmodule TelemetryMetricsStatsd.UDP do
   end
 
   def close(pid) do
-    GenServer.call(pid, :close)
-  end
-
-  def stop(pid, reason) do
-    GenServer.stop(pid, reason)
+    GenServer.cast(pid, :close)
   end
 
   @impl true
-  @spec init(config :: config) :: {:ok, __MODULE__.t(), timeout()}
+  @spec init(config :: config) :: {:ok, __MODULE__.t(), timeout()} | {:stop, reason :: term()}
   def init(config) do
     host = config.host
 
@@ -54,14 +50,10 @@ defmodule TelemetryMetricsStatsd.UDP do
         packet = Packet.new(config.mtu, config.max_report_interval_ms * 1000, send_fun)
         state = struct(__MODULE__, Map.merge(config, %{socket: socket, packet: packet}))
         {:ok, state, Packet.get_timeout(packet)}
-    end
-  end
 
-  @impl true
-  def handle_call(:close, _from, %__MODULE__{socket: socket, packet: packet} = state) do
-    Packet.flush_send(packet)
-    :gen_udp.close(socket)
-    {:stop, :close, :ok, state}
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   @impl true
@@ -76,6 +68,23 @@ defmodule TelemetryMetricsStatsd.UDP do
   @impl true
   def handle_cast({:send, data}, %{packet: packet} = state) do
     noreply(Map.put(state, :packet, Packet.maybe_send(packet, data)))
+  end
+
+  @impl true
+  def handle_cast(
+        :close,
+        %__MODULE__{socket: socket, host: host, port: port, packet: packet} = state
+      ) do
+    :gen_udp.close(socket)
+
+    case open(host) do
+      {:ok, new_socket} ->
+        new_packet = %Packet{packet | send_fun: make_send_fun(self(), new_socket, host, port)}
+        noreply(%__MODULE__{state | packet: new_packet, socket: new_socket})
+
+      {:error, reason} ->
+        {:stop, reason, state}
+    end
   end
 
   @impl true
