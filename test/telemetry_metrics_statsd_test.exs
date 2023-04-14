@@ -334,7 +334,7 @@ defmodule TelemetryMetricsStatsdTest do
       udp = Process.whereis(Pool.get_udp(pool_id))
 
       assert capture_log(fn ->
-               TelemetryMetricsStatsd.udp_error(reporter, udp, :closed)
+               TelemetryMetricsStatsd.udp_error(udp, :closed)
                # errors.
                eventually(fn ->
                  Process.whereis(Pool.get_udp(pool_id)) != udp
@@ -348,7 +348,7 @@ defmodule TelemetryMetricsStatsdTest do
       pool_id = TelemetryMetricsStatsd.get_pool_id(reporter)
       udp = Process.whereis(Pool.get_udp(pool_id))
 
-      TelemetryMetricsStatsd.udp_error(reporter, udp, :closed)
+      TelemetryMetricsStatsd.udp_error(udp, :closed)
 
       assert eventually(fn -> Process.whereis(Pool.get_udp(pool_id)) != udp end)
     end
@@ -359,7 +359,7 @@ defmodule TelemetryMetricsStatsdTest do
       pool_id = TelemetryMetricsStatsd.get_pool_id(reporter)
       udp = Process.whereis(Pool.get_udp(pool_id))
 
-      TelemetryMetricsStatsd.udp_error(reporter, udp, :closed)
+      TelemetryMetricsStatsd.udp_error(udp, :closed)
 
       eventually(fn -> Process.whereis(Pool.get_udp(pool_id)) != udp end)
 
