@@ -401,7 +401,10 @@ defmodule TelemetryMetricsStatsd do
     Process.flag(:trap_exit, true)
     metrics = Map.fetch!(options, :metrics)
 
-    default_udp_config = %{mtu: options.mtu, max_report_interval_ms: options.max_report_interval_ms}
+    default_udp_config = %{
+      mtu: options.mtu,
+      max_report_interval_ms: options.max_report_interval_ms
+    }
 
     udp_config = Map.merge(configure_host_resolution(options), default_udp_config)
 
@@ -428,8 +431,6 @@ defmodule TelemetryMetricsStatsd do
        host_resolution_interval: options.host_resolution_interval
      }}
   end
-
-
 
   @impl true
   def handle_call(:get_pool_id, _from, %{pool_id: pool_id} = state) do

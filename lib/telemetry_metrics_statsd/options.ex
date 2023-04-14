@@ -64,8 +64,7 @@ defmodule TelemetryMetricsStatsd.Options do
     max_report_interval_ms: [
       type: :non_neg_integer,
       default: 1000,
-      doc:
-        "maximum time to keep buffering metrics"
+      doc: "maximum time to keep buffering metrics"
     ]
   ]
 

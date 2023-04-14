@@ -20,7 +20,8 @@ defmodule TelemetryMetricsStatsd.Packet do
             bytes: 0,
             birth_micro: nil
 
-  @spec new(max_bytes :: integer(), max_age_micro :: integer(), send_fun :: function()) :: Packet.t()
+  @spec new(max_bytes :: integer(), max_age_micro :: integer(), send_fun :: function()) ::
+          Packet.t()
   def new(max_bytes, max_age_micro, send_fun) do
     do_new(max_bytes, max_age_micro, send_fun)
   end
@@ -44,7 +45,13 @@ defmodule TelemetryMetricsStatsd.Packet do
   end
 
   @spec flush_send(Packet.t()) :: Packet.t()
-  def flush_send(%Packet{data: data, bytes: bytes, max_bytes: max_bytes, max_age_micro: max_age_micro, send_fun: send_fun}) do
+  def flush_send(%Packet{
+        data: data,
+        bytes: bytes,
+        max_bytes: max_bytes,
+        max_age_micro: max_age_micro,
+        send_fun: send_fun
+      }) do
     bytes > 0 && send_fun.(data)
     do_new(max_bytes, max_age_micro, send_fun)
   end
@@ -104,12 +111,18 @@ defmodule TelemetryMetricsStatsd.Packet do
     maybe_send(packet)
   end
 
-  defp buffer_and_maybe_flush(%Packet{bytes: bytes, data: data, max_bytes: max_bytes} = packet, line) when is_binary(line) do
+  defp buffer_and_maybe_flush(
+         %Packet{bytes: bytes, data: data, max_bytes: max_bytes} = packet,
+         line
+       )
+       when is_binary(line) do
     new_bytes = concatenated_size(bytes, byte_size(line))
+
     case new_bytes > max_bytes do
       true ->
         flush_send(packet)
         |> buffer_and_maybe_flush(line)
+
       false ->
         maybe_send(%Packet{packet | data: concatenate(data, line), bytes: new_bytes})
     end
@@ -117,11 +130,10 @@ defmodule TelemetryMetricsStatsd.Packet do
 
   defp maybe_send(packet) do
     case get_timeout(packet) == 0 do
-      true  -> flush_send(packet)
+      true -> flush_send(packet)
       false -> packet
     end
   end
-
 
   defp concatenated_size(0, new_line_bytes), do: new_line_bytes
   defp concatenated_size(bytes, new_line_bytes), do: bytes + new_line_bytes + 1
@@ -132,6 +144,11 @@ defmodule TelemetryMetricsStatsd.Packet do
   defp now(), do: System.system_time(:microsecond)
 
   defp do_new(max_bytes, max_age_micro, send_fun) do
-    %Packet{max_bytes: max_bytes, max_age_micro: max_age_micro, send_fun: send_fun, birth_micro: now()}
+    %Packet{
+      max_bytes: max_bytes,
+      max_age_micro: max_age_micro,
+      send_fun: send_fun,
+      birth_micro: now()
+    }
   end
 end

@@ -65,7 +65,10 @@ defmodule TelemetryMetricsStatsd.UDP do
   end
 
   @impl true
-  def handle_cast({:update, new_host, new_port}, %__MODULE__{socket: socket, packet: packet} = state) do
+  def handle_cast(
+        {:update, new_host, new_port},
+        %__MODULE__{socket: socket, packet: packet} = state
+      ) do
     new_packet = %Packet{packet | send_fun: make_send_fun(self(), socket, new_host, new_port)}
     noreply(%__MODULE__{state | host: new_host, port: new_port, packet: new_packet})
   end
