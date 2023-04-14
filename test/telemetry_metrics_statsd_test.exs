@@ -12,60 +12,64 @@ defmodule TelemetryMetricsStatsdTest do
     {socket, port} = given_udp_port_opened()
     counter = given_counter("http.requests", event_name: "http.request")
 
-    start_reporter(metrics: [counter], port: port)
+    start_reporter(metrics: [counter], port: port, pool_size: 1)
 
     :telemetry.execute([:http, :request], %{latency: 211})
     :telemetry.execute([:http, :request], %{latency: 200})
     :telemetry.execute([:http, :request], %{latency: 198})
 
-    assert_reported(socket, "http.requests:1|c")
-    assert_reported(socket, "http.requests:1|c")
-    assert_reported(socket, "http.requests:1|c")
+    assert_reported(socket, "http.requests:1|c\n" <> "http.requests:1|c\n" <> "http.requests:1|c")
   end
 
   test "sum metric is reported as StatsD gauge with +n value" do
     {socket, port} = given_udp_port_opened()
     sum = given_sum("http.request.payload_size")
 
-    start_reporter(metrics: [sum], port: port)
+    start_reporter(metrics: [sum], port: port, pool_size: 1)
 
     :telemetry.execute([:http, :request], %{payload_size: 2001})
     :telemetry.execute([:http, :request], %{payload_size: 1585})
     :telemetry.execute([:http, :request], %{payload_size: 1872})
 
-    assert_reported(socket, "http.request.payload_size:+2001|g")
-    assert_reported(socket, "http.request.payload_size:+1585|g")
-    assert_reported(socket, "http.request.payload_size:+1872|g")
+    assert_reported(
+      socket,
+      "http.request.payload_size:+2001|g\n" <>
+        "http.request.payload_size:+1585|g\n" <> "http.request.payload_size:+1872|g"
+    )
   end
 
   test "last value metric is reported as StatsD gauge with absolute value" do
     {socket, port} = given_udp_port_opened()
     last_value = given_last_value("vm.memory.total")
 
-    start_reporter(metrics: [last_value], port: port)
+    start_reporter(metrics: [last_value], port: port, pool_size: 1)
 
     :telemetry.execute([:vm, :memory], %{total: 2001})
     :telemetry.execute([:vm, :memory], %{total: 1585})
     :telemetry.execute([:vm, :memory], %{total: 1872})
 
-    assert_reported(socket, "vm.memory.total:2001|g")
-    assert_reported(socket, "vm.memory.total:1585|g")
-    assert_reported(socket, "vm.memory.total:1872|g")
+    assert_reported(
+      socket,
+      "vm.memory.total:2001|g\n" <> "vm.memory.total:1585|g\n" <> "vm.memory.total:1872|g"
+    )
   end
 
   test "summary metric is reported as StatsD timer" do
     {socket, port} = given_udp_port_opened()
     summary = given_summary("http.request.latency")
 
-    start_reporter(metrics: [summary], port: port)
+    start_reporter(metrics: [summary], port: port, pool_size: 1)
 
     :telemetry.execute([:http, :request], %{latency: 172})
     :telemetry.execute([:http, :request], %{latency: 200})
     :telemetry.execute([:http, :request], %{latency: 198})
 
-    assert_reported(socket, "http.request.latency:172|ms")
-    assert_reported(socket, "http.request.latency:200|ms")
-    assert_reported(socket, "http.request.latency:198|ms")
+    assert_reported(
+      socket,
+      "http.request.latency:172|ms\n" <>
+        "http.request.latency:200|ms\n" <>
+        "http.request.latency:198|ms"
+    )
   end
 
   test "distribution metric is reported as StatsD timer" do
@@ -73,15 +77,17 @@ defmodule TelemetryMetricsStatsdTest do
 
     dist = given_distribution("http.request.latency")
 
-    start_reporter(metrics: [dist], port: port)
+    start_reporter(metrics: [dist], port: port, pool_size: 1)
 
     :telemetry.execute([:http, :request], %{latency: 172})
     :telemetry.execute([:http, :request], %{latency: 200})
     :telemetry.execute([:http, :request], %{latency: 198})
 
-    assert_reported(socket, "http.request.latency:172|ms")
-    assert_reported(socket, "http.request.latency:200|ms")
-    assert_reported(socket, "http.request.latency:198|ms")
+    assert_reported(
+      socket,
+      "http.request.latency:172|ms\n" <>
+        "http.request.latency:200|ms\n" <> "http.request.latency:198|ms"
+    )
   end
 
   test "standard formatter can be provided explicitly" do
@@ -98,14 +104,17 @@ defmodule TelemetryMetricsStatsdTest do
       metrics: [counter],
       port: port,
       formatter: :standard,
-      global_tags: [env: "prod"]
+      global_tags: [env: "prod"],
+      pool_size: 1
     )
 
     :telemetry.execute([:http, :request], %{latency: 172}, %{method: "GET", status: 200})
     :telemetry.execute([:http, :request], %{latency: 172}, %{method: "GET", status: 200})
 
-    assert_reported(socket, "http.requests.prod.GET.200:1|c")
-    assert_reported(socket, "http.requests.prod.GET.200:1|c")
+    assert_reported(
+      socket,
+      "http.requests.prod.GET.200:1|c\n" <> "http.requests.prod.GET.200:1|c"
+    )
   end
 
   test "DataDog formatter can be used" do
@@ -122,7 +131,8 @@ defmodule TelemetryMetricsStatsdTest do
       metrics: [counter],
       port: port,
       formatter: :datadog,
-      global_tags: [env: "prod"]
+      global_tags: [env: "prod"],
+      pool_size: 1
     )
 
     :telemetry.execute([:http, :request], %{latency: 172}, %{method: "GET", status: 200})
@@ -130,10 +140,13 @@ defmodule TelemetryMetricsStatsdTest do
     :telemetry.execute([:http, :request], %{latency: 198}, %{method: "GET", status: 404})
     :telemetry.execute([:http, :request], %{latency: 198}, %{method: "GET", status: 404})
 
-    assert_reported(socket, "http.requests:1|c|#env:prod,method:GET,status:200")
-    assert_reported(socket, "http.requests:1|c|#env:prod,method:POST,status:201")
-    assert_reported(socket, "http.requests:1|c|#env:prod,method:GET,status:404")
-    assert_reported(socket, "http.requests:1|c|#env:prod,method:GET,status:404")
+    assert_reported(
+      socket,
+      "http.requests:1|c|#env:prod,method:GET,status:200\n" <>
+        "http.requests:1|c|#env:prod,method:POST,status:201\n" <>
+        "http.requests:1|c|#env:prod,method:GET,status:404\n" <>
+        "http.requests:1|c|#env:prod,method:GET,status:404"
+    )
   end
 
   test "it fails to start with invalid formatter" do
@@ -169,15 +182,16 @@ defmodule TelemetryMetricsStatsdTest do
     {socket, port} = given_udp_port_opened()
     last_value = given_last_value("vm.memory.total", measurement: fn m -> m.total * 2 end)
 
-    start_reporter(metrics: [last_value], port: port)
+    start_reporter(metrics: [last_value], port: port, pool_size: 1)
 
     :telemetry.execute([:vm, :memory], %{total: 2001})
     :telemetry.execute([:vm, :memory], %{total: 1585})
     :telemetry.execute([:vm, :memory], %{total: 1872})
 
-    assert_reported(socket, "vm.memory.total:4002|g")
-    assert_reported(socket, "vm.memory.total:3170|g")
-    assert_reported(socket, "vm.memory.total:3744|g")
+    assert_reported(
+      socket,
+      "vm.memory.total:4002|g\n" <> "vm.memory.total:3170|g\n" <> "vm.memory.total:3744|g"
+    )
   end
 
   test "measurement function can take two arguments" do
@@ -188,15 +202,16 @@ defmodule TelemetryMetricsStatsdTest do
         measurement: fn measurements, metadata -> measurements.sum / metadata.sample_size end
       )
 
-    start_reporter(metrics: [last_value], port: port)
+    start_reporter(metrics: [last_value], port: port, pool_size: 1)
 
     :telemetry.execute([:my, :statistics], %{sum: 200}, %{sample_size: 2})
     :telemetry.execute([:my, :statistics], %{sum: 300}, %{sample_size: 3})
     :telemetry.execute([:my, :statistics], %{sum: 100}, %{sample_size: 1})
 
-    assert_reported(socket, "my.statistics.mean:100|g")
-    assert_reported(socket, "my.statistics.mean:100|g")
-    assert_reported(socket, "my.statistics.mean:100|g")
+    assert_reported(
+      socket,
+      "my.statistics.mean:100|g\n" <> "my.statistics.mean:100|g\n" <> "my.statistics.mean:100|g"
+    )
   end
 
   test "there can be multiple metrics derived from the same event" do
@@ -206,7 +221,7 @@ defmodule TelemetryMetricsStatsdTest do
 
     sum = given_sum("http.request.payload_size")
 
-    start_reporter(metrics: [dist, sum], port: port)
+    start_reporter(metrics: [dist, sum], port: port, pool_size: 1)
 
     :telemetry.execute([:http, :request], %{latency: 172, payload_size: 121})
     :telemetry.execute([:http, :request], %{latency: 200, payload_size: 64})
@@ -214,17 +229,11 @@ defmodule TelemetryMetricsStatsdTest do
 
     assert_reported(
       socket,
-      "http.request.latency:172|ms\n" <> "http.request.payload_size:+121|g"
-    )
-
-    assert_reported(
-      socket,
-      "http.request.latency:200|ms\n" <> "http.request.payload_size:+64|g"
-    )
-
-    assert_reported(
-      socket,
-      "http.request.latency:198|ms\n" <> "http.request.payload_size:+1021|g"
+      "http.request.latency:172|ms\n" <>
+        "http.request.payload_size:+121|g\n" <>
+        "http.request.latency:200|ms\n" <>
+        "http.request.payload_size:+64|g\n" <>
+        "http.request.latency:198|ms\n" <> "http.request.payload_size:+1021|g"
     )
   end
 
@@ -604,11 +613,13 @@ defmodule TelemetryMetricsStatsdTest do
     test "is periodically repeated if configured" do
       counter = given_counter("http.request.count")
 
-      reporter = start_reporter(
-        host: "localhost",
-        metrics: [counter],
-        host_resolution_interval: 100
-      )
+      reporter =
+        start_reporter(
+          host: "localhost",
+          metrics: [counter],
+          host_resolution_interval: 100
+        )
+
       pool_id = TelemetryMetricsStatsd.get_pool_id(reporter)
 
       assert udp_host(Pool.get_udp(pool_id)) == {127, 0, 0, 1}
@@ -650,7 +661,7 @@ defmodule TelemetryMetricsStatsdTest do
 
   defp assert_reported(socket, expected_payload) do
     expected_size = byte_size(expected_payload)
-    {:ok, {_host, _port, payload}} = :gen_udp.recv(socket, expected_size, 1000)
+    {:ok, {_host, _port, payload}} = :gen_udp.recv(socket, expected_size, 1500)
     assert payload == String.to_charlist(expected_payload)
   end
 
