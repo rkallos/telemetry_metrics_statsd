@@ -45,7 +45,7 @@ defmodule TelemetryMetricsStatsd.UDP do
 
     case open(host) do
       {:ok, socket} ->
-        send_fun = make_send_fun(self(), socket, host, config.port)
+        send_fun = make_send_fun(socket, host, config.port)
 
         packet = Packet.new(config.mtu, config.max_report_interval_ms * 1000, send_fun)
         state = struct(__MODULE__, Map.merge(config, %{socket: socket, packet: packet}))
@@ -61,7 +61,7 @@ defmodule TelemetryMetricsStatsd.UDP do
         {:update, new_host, new_port},
         %__MODULE__{socket: socket, packet: packet} = state
       ) do
-    new_packet = %Packet{packet | send_fun: make_send_fun(self(), socket, new_host, new_port)}
+    new_packet = %Packet{packet | send_fun: make_send_fun(socket, new_host, new_port)}
     noreply(%__MODULE__{state | host: new_host, port: new_port, packet: new_packet})
   end
 
@@ -79,7 +79,7 @@ defmodule TelemetryMetricsStatsd.UDP do
 
     case open(host) do
       {:ok, new_socket} ->
-        new_packet = %Packet{packet | send_fun: make_send_fun(self(), new_socket, host, port)}
+        new_packet = %Packet{packet | send_fun: make_send_fun(new_socket, host, port)}
         noreply(%__MODULE__{state | packet: new_packet, socket: new_socket})
 
       {:error, reason} ->
@@ -117,25 +117,25 @@ defmodule TelemetryMetricsStatsd.UDP do
     end
   end
 
-  defp make_send_fun(socket_owner, socket, {:local, _} = host, _port) do
+  defp make_send_fun(socket, {:local, _} = host, _port) do
     fn data ->
-      do_send(socket_owner, socket, host, 0, data)
+      do_send(socket, host, 0, data)
     end
   end
 
-  defp make_send_fun(socket_owner, socket, host, port) do
+  defp make_send_fun(socket, host, port) do
     fn data ->
-      do_send(socket_owner, socket, host, port, data)
+      do_send(socket, host, port, data)
     end
   end
 
-  defp do_send(socket_owner, socket, host, port, data) do
+  defp do_send(socket, host, port, data) do
     case :gen_udp.send(socket, host, port, data) do
       :ok ->
         :ok
 
       {:error, reason} ->
-        TelemetryMetricsStatsd.udp_error(socket_owner, reason)
+        TelemetryMetricsStatsd.udp_error(self(), reason)
         :ok
     end
   end
