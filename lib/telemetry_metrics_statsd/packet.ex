@@ -33,29 +33,14 @@ defmodule TelemetryMetricsStatsd.Packet do
     end
   end
 
-  @spec maybe_send(Packet.t(), iodata()) :: Packet.t()
-  def maybe_send(packet, line) when is_list(line) do
-    maybe_send(packet, IO.iodata_to_binary(line))
+  @spec maybe_send(Packet.t(), lines :: [binary()]) :: Packet.t()
+  def maybe_send(packet, [line | lines]) do
+    buffer_and_maybe_flush(packet, line)
+    |> maybe_send(lines)
   end
 
-  def maybe_send(packet, "") do
-    maybe_send(packet)
-  end
-
-  def maybe_send(%Packet{max_bytes: max_bytes} = packet, line) when byte_size(line) > max_bytes do
-    Logger.error("discarded due to packet size overflow:\nmetric=#{inspect(line)}")
-    maybe_send(packet)
-  end
-
-  def maybe_send(%Packet{bytes: bytes, data: data, max_bytes: max_bytes} = packet, line) when is_binary(line) do
-    new_bytes = concatenated_size(bytes, byte_size(line))
-    case new_bytes > max_bytes do
-      true ->
-        new_packet = flush_send(packet)
-        maybe_send(new_packet, line)
-      false ->
-        maybe_send(%Packet{packet | data: concatenate(data, line), bytes: new_bytes})
-    end
+  def maybe_send(packet, []) do
+    packet
   end
 
   @spec flush_send(Packet.t()) :: Packet.t()
@@ -112,6 +97,21 @@ defmodule TelemetryMetricsStatsd.Packet do
         {[], 0, 0},
         packet | acc
       ])
+    end
+  end
+
+  defp buffer_and_maybe_flush(packet, "") do
+    maybe_send(packet)
+  end
+
+  defp buffer_and_maybe_flush(%Packet{bytes: bytes, data: data, max_bytes: max_bytes} = packet, line) when is_binary(line) do
+    new_bytes = concatenated_size(bytes, byte_size(line))
+    case new_bytes > max_bytes do
+      true ->
+        flush_send(packet)
+        |> buffer_and_maybe_flush(line)
+      false ->
+        maybe_send(%Packet{packet | data: concatenate(data, line), bytes: new_bytes})
     end
   end
 
