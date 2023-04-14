@@ -1,61 +1,142 @@
 defmodule TelemetryMetricsStatsd.UDP do
   @moduledoc false
 
-  defstruct [:host, :port, :socket]
+  use GenServer
+  require Logger
+  alias TelemetryMetricsStatsd.Packet
+
+  defstruct [:host, :port, :socket, :packet]
 
   @opaque t :: %__MODULE__{
             host: :inet.hostname() | :inet.ip_address() | :inet.local_address(),
             port: :inet.port_number(),
-            socket: :gen_udp.socket()
+            socket: :gen_udp.socket(),
+            packet: Packet.t()
           }
 
   @type config :: %{
-          :host => :inet.hostname() | :inet.ip_address() | :inet.local_address(),
-          optional(:port) => :inet.port_number()
+          host: :inet.hostname() | :inet.ip_address() | :inet.local_address(),
+          port: :inet.port_number(),
+          mtu: non_neg_integer(),
+          max_report_interval_ms: non_neg_integer()
         }
 
-  @spec open(config()) ::
-          {:ok, t()} | {:error, reason :: term()}
-  def open(config) do
-    opts = [active: false]
+  def start_link(options) do
+    GenServer.start_link(__MODULE__, options)
+  end
+
+  @spec send(GenServer.name(), iodata) :: :ok
+  def send(pid, data) do
+    GenServer.cast(pid, {:send, data})
+  end
+
+  def update(pid, new_host, new_port) do
+    GenServer.cast(pid, {:update, new_host, new_port})
+  end
+
+  def close(pid) do
+    GenServer.cast(pid, :close)
+  end
+
+  @impl true
+  @spec init(config :: config) :: {:ok, __MODULE__.t(), timeout()} | {:stop, reason :: term()}
+  def init(config) do
+    host = config.host
+
+    case open(host) do
+      {:ok, socket} ->
+        send_fun = make_send_fun(socket, host, config.port)
+
+        packet = Packet.new(config.mtu, config.max_report_interval_ms * 1000, send_fun)
+        state = struct(__MODULE__, Map.merge(config, %{socket: socket, packet: packet}))
+        {:ok, state, Packet.get_timeout(packet)}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
+  end
+
+  @impl true
+  def handle_cast(
+        {:update, new_host, new_port},
+        %__MODULE__{socket: socket, packet: packet} = state
+      ) do
+    new_packet = %Packet{packet | send_fun: make_send_fun(socket, new_host, new_port)}
+    noreply(%__MODULE__{state | host: new_host, port: new_port, packet: new_packet})
+  end
+
+  @impl true
+  def handle_cast({:send, data}, %{packet: packet} = state) do
+    noreply(Map.put(state, :packet, Packet.maybe_send(packet, data)))
+  end
+
+  @impl true
+  def handle_cast(
+        :close,
+        %__MODULE__{socket: socket, host: host, port: port, packet: packet} = state
+      ) do
+    :gen_udp.close(socket)
+
+    case open(host) do
+      {:ok, new_socket} ->
+        new_packet = %Packet{packet | send_fun: make_send_fun(new_socket, host, port)}
+        noreply(%__MODULE__{state | packet: new_packet, socket: new_socket})
+
+      {:error, reason} ->
+        {:stop, reason, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:timeout, %{packet: packet} = state) do
+    noreply(Map.put(state, :packet, Packet.flush_send(packet)))
+  end
+
+  defp noreply(%{packet: packet} = state) do
+    {:noreply, state, Packet.get_timeout(packet)}
+  end
+
+  defp open(host) do
+    default_opts = [active: false]
 
     opts =
-      case config.host do
+      case host do
         {:local, _} ->
-          [:local | opts]
+          [:local | default_opts]
 
         _ ->
-          opts
+          default_opts
       end
 
     case :gen_udp.open(0, opts) do
       {:ok, socket} ->
-        udp = struct(__MODULE__, Map.put(config, :socket, socket))
-        {:ok, udp}
+        {:ok, socket}
 
       {:error, _} = err ->
         err
     end
   end
 
-  @spec send(t(), iodata()) :: :ok | {:error, reason :: term()}
-  def send(%__MODULE__{host: host, port: port, socket: socket}, data) do
-    case host do
-      {:local, _} ->
-        :gen_udp.send(socket, host, 0, data)
-
-      _ ->
-        :gen_udp.send(socket, host, port, data)
+  defp make_send_fun(socket, {:local, _} = host, _port) do
+    fn data ->
+      do_send(socket, host, 0, data)
     end
   end
 
-  @spec update(t(), :inet.hostname() | :inet.ip_address(), :inet.port_number()) :: t()
-  def update(%__MODULE__{} = udp, new_host, new_port) do
-    %__MODULE__{udp | host: new_host, port: new_port}
+  defp make_send_fun(socket, host, port) do
+    fn data ->
+      do_send(socket, host, port, data)
+    end
   end
 
-  @spec close(t()) :: :ok
-  def close(%__MODULE__{socket: socket}) do
-    :gen_udp.close(socket)
+  defp do_send(socket, host, port, data) do
+    case :gen_udp.send(socket, host, port, data) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        TelemetryMetricsStatsd.udp_error(self(), reason)
+        :ok
+    end
   end
 end

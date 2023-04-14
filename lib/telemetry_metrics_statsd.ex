@@ -317,7 +317,7 @@ defmodule TelemetryMetricsStatsd do
   require Record
 
   alias Telemetry.Metrics
-  alias TelemetryMetricsStatsd.{EventHandler, Options, UDP}
+  alias TelemetryMetricsStatsd.{EventHandler, Options, UDP, Pool}
 
   @type prefix :: String.t() | atom() | nil
   @type host :: String.t() | :inet.ip_address()
@@ -331,6 +331,7 @@ defmodule TelemetryMetricsStatsd do
           | {:formatter, :standard | :datadog}
           | {:global_tags, Keyword.t()}
           | {:host_resolution_interval, non_neg_integer()}
+          | {:max_report_interval_ms, non_neg_integer()}
   @type options :: [option]
 
   Record.defrecordp(:hostent, Record.extract(:hostent, from_lib: "kernel/include/inet.hrl"))
@@ -384,30 +385,15 @@ defmodule TelemetryMetricsStatsd do
   end
 
   @doc false
-  @spec get_udp(:ets.tid()) :: {:ok, UDP.t()} | :error
-  def get_udp(pool_id) do
-    # The table can be empty if the UDP error is reported for all the sockets.
-    case :ets.lookup(pool_id, :udp) do
-      [] ->
-        Logger.error("Failed to publish metrics over UDP: no open sockets available.")
-        :error
-
-      udps ->
-        {:udp, udp} = Enum.random(udps)
-        {:ok, udp}
-    end
-  end
-
-  @doc false
-  @spec get_pool_id(pid()) :: :ets.tid()
+  @spec get_pool_id(pid()) :: atom()
   def get_pool_id(reporter) do
     GenServer.call(reporter, :get_pool_id)
   end
 
-  @doc false
-  @spec udp_error(pid(), UDP.t(), reason :: term) :: :ok
-  def udp_error(reporter, udp, reason) do
-    GenServer.cast(reporter, {:udp_error, udp, reason})
+  @spec udp_error(pid(), reason :: term) :: :ok
+  def udp_error(udp, reason) do
+    Logger.error("Failed to publish metrics over UDP: #{inspect(reason)}")
+    UDP.close(udp)
   end
 
   @impl true
@@ -415,20 +401,14 @@ defmodule TelemetryMetricsStatsd do
     Process.flag(:trap_exit, true)
     metrics = Map.fetch!(options, :metrics)
 
-    udp_config =
-      case options.host do
-        {:local, _} = host -> %{host: host}
-        _ -> configure_host_resolution(options)
-      end
+    default_udp_config = %{
+      mtu: options.mtu,
+      max_report_interval_ms: options.max_report_interval_ms
+    }
 
-    udps =
-      for _ <- 1..options.pool_size do
-        {:ok, udp} = UDP.open(udp_config)
-        {:udp, udp}
-      end
+    udp_config = Map.merge(configure_host_resolution(options), default_udp_config)
 
-    pool_id = :ets.new(__MODULE__, [:bag, :protected, read_concurrency: true])
-    :ets.insert(pool_id, udps)
+    {:ok, pool_id} = Pool.new(options.pool_size, udp_config)
 
     handler_ids =
       EventHandler.attach(
@@ -450,30 +430,6 @@ defmodule TelemetryMetricsStatsd do
        port: options.port,
        host_resolution_interval: options.host_resolution_interval
      }}
-  end
-
-  @impl true
-  def handle_cast({:udp_error, old_udp, reason}, %{pool_id: pool_id} = state) do
-    udps = :ets.lookup(pool_id, :udp)
-    old_entry = {:udp, old_udp}
-
-    if Enum.find(udps, fn entry -> entry == old_entry end) do
-      Logger.error("Failed to publish metrics over UDP: #{inspect(reason)}")
-      UDP.close(old_udp)
-      :ets.delete_object(pool_id, old_entry)
-
-      case UDP.open(state.udp_config) do
-        {:ok, udp} ->
-          :ets.insert(pool_id, {:udp, udp})
-          {:noreply, state}
-
-        {:error, reason} ->
-          Logger.error("Failed to reopen UDP socket: #{inspect(reason)}")
-          {:stop, {:udp_open_failed, reason}, state}
-      end
-    else
-      {:noreply, state}
-    end
   end
 
   @impl true
@@ -514,15 +470,15 @@ defmodule TelemetryMetricsStatsd do
   end
 
   @impl true
-  def terminate(_reason, state) do
+  def terminate(_reason, %{pool_id: pool_id} = state) do
     EventHandler.detach(state.handler_ids)
-
+    Pool.stop(pool_id)
     :ok
   end
 
   defp update_host(state, new_address) do
-    %{pool_id: pool_id, udp_config: %{port: port} = udp_config} = state
-    update_pool(pool_id, new_address, port)
+    %{udp_config: %{port: port} = udp_config, pool_id: pool_id} = state
+    Pool.update(pool_id, new_address, port)
 
     %{state | udp_config: %{udp_config | host: new_address}}
   end
@@ -541,15 +497,5 @@ defmodule TelemetryMetricsStatsd do
   defp configure_host_resolution(%{host: host, port: port}) do
     {:ok, hostent(h_addr_list: [ip | _ips])} = :inet.gethostbyname(host)
     %{host: ip, port: port}
-  end
-
-  defp update_pool(pool_id, new_host, new_port) do
-    pool_id
-    |> :ets.tab2list()
-    |> Enum.each(fn {:udp, udp} ->
-      :ets.delete_object(pool_id, {:udp, udp})
-      updated_udp = UDP.update(udp, new_host, new_port)
-      :ets.insert(pool_id, {:udp, updated_udp})
-    end)
   end
 end
