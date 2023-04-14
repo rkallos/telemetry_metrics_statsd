@@ -31,7 +31,7 @@ defmodule TelemetryMetricsStatsd.UDP do
   end
 
   def update(pid, new_host, new_port) do
-    GenServer.call(pid, {:update, new_host, new_port})
+    GenServer.cast(pid, {:update, new_host, new_port})
   end
 
   def close(pid) do
@@ -58,16 +58,16 @@ defmodule TelemetryMetricsStatsd.UDP do
   end
 
   @impl true
-  def handle_call({:update, new_host, new_port}, _from, %__MODULE__{socket: socket, packet: packet} = state) do
-    new_packet = %Packet{packet | send_fun: make_send_fun(self(), socket, new_host, new_port)}
-    {:noreply, %__MODULE__{state | host: new_host, port: new_port, packet: new_packet}}
-  end
-
-  @impl true
   def handle_call(:close, _from, %__MODULE__{socket: socket, packet: packet} = state) do
     Packet.flush_send(packet)
     :gen_udp.close(socket)
     {:stop, :close, :ok, state}
+  end
+
+  @impl true
+  def handle_cast({:update, new_host, new_port}, %__MODULE__{socket: socket, packet: packet} = state) do
+    new_packet = %Packet{packet | send_fun: make_send_fun(self(), socket, new_host, new_port)}
+    noreply(%__MODULE__{state | host: new_host, port: new_port, packet: new_packet})
   end
 
   @impl true
@@ -91,6 +91,7 @@ defmodule TelemetryMetricsStatsd.UDP do
       case host do
         {:local, _} ->
           [:local | default_opts]
+
         _ ->
           default_opts
       end
@@ -120,6 +121,7 @@ defmodule TelemetryMetricsStatsd.UDP do
     case :gen_udp.send(socket, host, port, data) do
       :ok ->
         :ok
+
       {:error, reason} = error ->
         TelemetryMetricsStatsd.udp_error(socket_owner, reason)
         error
