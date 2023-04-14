@@ -125,9 +125,9 @@ defmodule TelemetryMetricsStatsd.UDP do
       :ok ->
         :ok
 
-      {:error, reason} = error ->
+      {:error, reason} ->
         TelemetryMetricsStatsd.udp_error(socket_owner, reason)
-        error
+        :ok
     end
   end
 end
